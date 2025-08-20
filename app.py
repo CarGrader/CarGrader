@@ -1,22 +1,33 @@
-from flask import Flask, g, render_template, request, jsonify, url_for
+from flask import Flask, g, render_template, request, jsonify, url_for, abort
 import sqlite3
 import os
-
-# === CONFIG ===
-DB_PATH = os.environ.get(
-    "DB_PATH",
-    r"C:\Users\woogl\OneDrive\Documents\The CarGrader\Databases\GraderRater.db"
-)
+import shutil
 
 app = Flask(__name__)
+
+# === CONFIG ===
+# Prefer a mounted disk in production: set DB_DIR=/var/data in Render Env.
+# Optional overrides:
+#   DB_FILENAME (default "GraderRater.db")
+#   DB_PATH     (full explicit path; overrides DB_DIR/DB_FILENAME)
+BASE_DIR = os.path.dirname(__file__)
+DB_DIR = os.environ.get("DB_DIR") or os.path.join(BASE_DIR, "instance")
+os.makedirs(DB_DIR, exist_ok=True)
+
+DB_FILENAME = os.environ.get("DB_FILENAME", "GraderRater.db")
+DB_PATH = os.environ.get("DB_PATH") or os.path.join(DB_DIR, DB_FILENAME)
+
+# Optional secure upload token for one-time DB upload (see /admin/upload-db)
+UPLOAD_TOKEN = os.environ.get("UPLOAD_TOKEN")  # e.g., a long random string
+MAX_CONTENT_LENGTH = 1024 * 1024 * 1024  # 1 GB cap; adjust if needed
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+
 
 # === DB HELPERS ===
 def get_db():
     if "db" not in g:
-        # Windows backslashes → forward slashes for SQLite URI
-        db_uri_path = DB_PATH.replace("\\", "/")
-        uri = f"file:{db_uri_path}?mode=ro"
-        g.db = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        # Standard file path (not URI) so writes work on Render/Linux
+        g.db = sqlite3.connect(DB_PATH, check_same_thread=False)
         g.db.row_factory = sqlite3.Row
     return g.db
 
@@ -25,6 +36,7 @@ def close_db(exception):
     db = g.pop("db", None)
     if db is not None:
         db.close()
+
 
 # === PAGES ===
 @app.route("/")
@@ -36,13 +48,15 @@ def favicon():
     # avoid noisy 404s; add a real favicon later if you want
     return ("", 204)
 
+
 # === DIAGNOSTICS ===
 @app.route("/api/health")
 def health():
     try:
         db = get_db()
         tables = [r["name"] for r in db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()]
         exists = "AllCars" in tables
         count_all = db.execute("SELECT COUNT(*) AS c FROM AllCars").fetchone()["c"] if exists else 0
         count_ready = db.execute(
@@ -57,6 +71,7 @@ def health():
         })
     except Exception as e:
         return jsonify({"error": str(e), "db_path": DB_PATH}), 500
+
 
 # === DATA APIS ===
 @app.route("/api/years")
@@ -154,7 +169,26 @@ def grade():
         print("Error /api/grade:", e)
         return jsonify({"error": "Server error"}), 500
 
-# === MAIN ===
+
+# === ONE-TIME ADMIN: upload a large DB to the mounted disk ===
+# POST /admin/upload-db  with header: Authorization: Bearer <UPLOAD_TOKEN>  and form-data: file=@path/to/your.db
+@app.route("/admin/upload-db", methods=["POST"])
+def upload_db():
+    if not UPLOAD_TOKEN:
+        abort(404)  # route effectively disabled unless token is set
+    token = request.headers.get("Authorization", "")
+    if token != f"Bearer {UPLOAD_TOKEN}":
+        abort(401, "unauthorized")
+    file = request.files.get("file")
+    if not file or not file.filename.lower().endswith(".db"):
+        abort(400, "upload a .db file")
+    tmp_path = DB_PATH + ".tmp"
+    file.save(tmp_path)
+    os.replace(tmp_path, DB_PATH)  # atomic replace
+    return jsonify({"ok": True, "db_path": DB_PATH})
+
+
+# === MAIN (local only; Render uses gunicorn) ===
 if __name__ == "__main__":
-    # If you prefer, run with:  set DB_PATH=C:\...\GraderRater.db  &&  python app.py
     app.run(host="0.0.0.0", port=5000, debug=True)
+
