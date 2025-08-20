@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CarGrader</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="{{ url_for('favicon') }}">
+  <style>
+    :root{
+      --bg:#f5f7fb; --panel:#fff; --text:#0f172a; --muted:#64748b;
+      --primary:#2563eb; --primary-600:#1d4ed8; --ring:rgba(37,99,235,.25); --border:#e5e7eb;
+    }
+    *{box-sizing:border-box} html,body{height:100%}
+    body{
+      margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--text);
+      background:radial-gradient(1000px 600px at 10% -10%, #eaf0ff 0%, transparent 60%),
+                 radial-gradient(900px 500px at 110% 10%, #e8f6ff 0%, transparent 60%), var(--bg);
+      display:grid;place-items:center;padding:24px
+    }
+    .shell{
+      width:100%;max-width:840px;background:var(--panel);border:1px solid var(--border);
+      border-radius:20px;padding:28px;box-shadow:0 10px 35px rgba(2,6,23,.08);text-align:center
+    }
+    h1{margin:0 0 8px;font-size:40px;letter-spacing:.2px} /* bigger title */
+    .sub{margin:0 0 24px;color:var(--muted);font-size:18px;font-weight:600}
+    .row{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+    .field{min-width:160px;text-align:left}
+    label{display:block;font-weight:600;margin:0 0 6px}
+    select{
+      width:100%;padding:10px 12px;font-size:16px;border-radius:12px;border:1px solid var(--border);background:#fff;outline:none
+    }
+    select:focus{box-shadow:0 0 0 6px var(--ring);border-color:var(--primary)}
+    button{
+      padding:12px 18px;font-size:16px;border-radius:12px;border:1px solid var(--primary);
+      background:var(--primary);color:#fff;font-weight:600;cursor:pointer;transition:transform .02s, background .2s
+    }
+    button:hover{background:var(--primary-600)} button:active{transform:translateY(1px)}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    .result{margin-top:24px;display:none;border-top:1px solid var(--border);padding-top:20px}
+    /* New centered score layout */
+    .score-wrap{margin-top:8px}
+    .score-value{
+      font-size:72px;            /* BIG score */
+      font-weight:900;
+      line-height:1;
+      letter-spacing:.5px;
+    }
+    .score-footnote{
+      margin-top:8px;
+      color:var(--muted);
+      font-size:14px;
+    }
+    .muted{color:var(--muted);font-size:13px;margin-top:12px}
+    .error{color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:10px;padding:8px 12px;margin:10px auto;max-width:560px;display:none}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <h1>CarGrader</h1>
+    <p class="sub">Is it <em>Great</em> or is it <em>Garbage</em>?</p>
+
+    <div id="err" class="error"></div>
+
+    <div class="row">
+      <div class="field">
+        <label for="year">Year</label>
+        <select id="year"><option value="">Select...</option></select>
+      </div>
+      <div class="field">
+        <label for="make">Make</label>
+        <select id="make" disabled><option value="">Select...</option></select>
+      </div>
+      <div class="field">
+        <label for="model">Model</label>
+        <select id="model" disabled><option value="">Select...</option></select>
+      </div>
+      <div class="field" style="align-self:flex-end;">
+        <button id="checkBtn" disabled>Get Results</button>
+      </div>
+    </div>
+
+    <section id="result" class="result">
+      <h2 id="title" style="margin:0 0 8px; font-size:22px;"></h2>
+
+      <div class="score-wrap">
+        <div class="score-value" id="scoreVal">—</div>
+        <div class="score-footnote">
+          Certainty: <span id="certVal">—</span>
+        </div>
+      </div>
+
+      <p class="muted">Data: <em>AllCars</em> (ModelYear, Make, Model → Score &amp; Certainty).</p>
+    </section>
+  </main>
+
+  <script>
+    function showError(msg){ const el=document.getElementById("err"); el.textContent=msg; el.style.display="block"; }
+    function clearError(){ const el=document.getElementById("err"); el.textContent=""; el.style.display="none"; }
+    function log(...args){ console.log("[CarGrader]", ...args); }
+
+    const yearSel = document.getElementById("year");
+    const makeSel = document.getElementById("make");
+    const modelSel = document.getElementById("model");
+    const btn = document.getElementById("checkBtn");
+    const result = document.getElementById("result");
+    const title = document.getElementById("title");
+    const scoreVal = document.getElementById("scoreVal");
+    const certVal = document.getElementById("certVal");
+
+    async function fetchJSON(url) {
+      const bust = url.includes("?") ? "&" : "?";
+      const full = url + bust + "nocache=" + Date.now();
+      const res = await fetch(full, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      return res.json();
+    }
+
+    async function loadYears() {
+      clearError();
+      yearSel.innerHTML = '<option value="">Select...</option>';
+      try {
+        const years = await fetchJSON("/api/years");
+        if (!Array.isArray(years) || years.length === 0) {
+          showError("No years available. Check /api/health for database status.");
+          return;
+        }
+        const opts = years.map(y => `<option value="${y}">${y}</option>`).join("");
+        yearSel.insertAdjacentHTML("beforeend", opts);
+      } catch (e) { console.error(e); showError("Failed to load years."); }
+    }
+
+    window.addEventListener("DOMContentLoaded", loadYears);
+
+    yearSel.addEventListener("change", async () => {
+      makeSel.disabled = true; modelSel.disabled = true; btn.disabled = true;
+      modelSel.innerHTML = '<option value="">Select...</option>'; clearError();
+      if (!yearSel.value) { makeSel.innerHTML = '<option value="">Select...</option>'; return; }
+      try{
+        const makes = await fetchJSON(`/api/makes?year=${encodeURIComponent(yearSel.value)}`);
+        makeSel.innerHTML = '<option value="">Select...</option>' +
+          makes.map(m => `<option value="${m}">${m}</option>`).join("");
+        makeSel.disabled = makes.length === 0;
+        if (makes.length === 0) showError("No makes for that year.");
+      }catch(e){ console.error(e); showError("Failed to load makes."); }
+    });
+
+    makeSel.addEventListener("change", async () => {
+      modelSel.disabled = true; btn.disabled = true; clearError();
+      if (!makeSel.value) { modelSel.innerHTML = '<option value="">Select...</option>'; return; }
+      try{
+        const models = await fetchJSON(`/api/models?year=${encodeURIComponent(yearSel.value)}&make=${encodeURIComponent(makeSel.value)}`);
+        modelSel.innerHTML = '<option value="">Select...</option>' +
+          models.map(m => `<option value="${m}">${m}</option>`).join("");
+        modelSel.disabled = models.length === 0;
+        if (models.length === 0) showError("No models for that make/year.");
+      }catch(e){ console.error(e); showError("Failed to load models."); }
+    });
+
+    modelSel.addEventListener("change", () => {
+      btn.disabled = !(yearSel.value && makeSel.value && modelSel.value);
+    });
+
+    btn.addEventListener("click", async () => {
+      clearError();
+      try {
+        const data = await fetchJSON(`/api/grade?year=${encodeURIComponent(yearSel.value)}&make=${encodeURIComponent(makeSel.value)}&model=${encodeURIComponent(modelSel.value)}`);
+        title.textContent = `${data.year} ${data.make} ${data.model}`;
+        const score = Number.isFinite(data.score) ? data.score : null;
+        const cert  = Number.isFinite(data.certainty) ? data.certainty : null;
+        scoreVal.textContent = (score !== null) ? score.toFixed(1) : "N/A";
+        certVal.textContent  = (cert  !== null) ? cert.toFixed(1)  : "N/A";
+        result.style.display = "block";
+      } catch (e) {
+        console.error(e);
+        showError("No grade found for that selection.");
+        result.style.display = "block";
+        scoreVal.textContent = "—"; certVal.textContent = "—";
+      }
+    });
+  </script>
+</body>
+</html>
